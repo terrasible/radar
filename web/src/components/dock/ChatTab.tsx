@@ -1,22 +1,17 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { Bot, AlertCircle, Settings, Sparkles } from 'lucide-react'
+import { Bot, AlertCircle, Settings, Sparkles, Clock, Plus, Trash2, X } from 'lucide-react'
+import { clsx } from 'clsx'
 import { ChatMessage } from './ChatMessage'
-import type { ToolCallInfo } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import { streamChat, useAIProviders, useSetAIProvider } from '../../api/ai'
 import type { ChatMessage as ChatMessageType, ResourceContext, ViewContext, ToolCallEvent, ToolResultEvent } from '../../api/ai'
+import { useChatHistory } from '../../hooks/useChatHistory'
+import type { DisplayMessage } from '../../hooks/useChatHistory'
 
 interface ChatTabProps {
   resourceContext?: ResourceContext
   viewContext?: ViewContext
   initialMessage?: string
-}
-
-interface DisplayMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  toolCalls?: ToolCallInfo[]
 }
 
 function getSuggestedQuestions(
@@ -80,15 +75,28 @@ function getSuggestedQuestions(
   ]
 }
 
-let messageIdCounter = 0
+function formatRelativeTime(timestamp: number): string {
+  const diff = Date.now() - timestamp
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
 
 export function ChatTab({ resourceContext, viewContext, initialMessage }: ChatTabProps) {
-  const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const initialSentRef = useRef(false)
+  const historyRef = useRef<HTMLDivElement>(null)
+
+  const history = useChatHistory()
+  const messages = history.activeConversation?.messages ?? []
 
   const { data: providers, isLoading: loadingProviders, error: providerError } = useAIProviders()
   const setProvider = useSetAIProvider()
@@ -96,10 +104,29 @@ export function ChatTab({ resourceContext, viewContext, initialMessage }: ChatTa
   const hasProvider = providers?.providers?.some(p => p.active && p.available)
   const activeProvider = providers?.providers?.find(p => p.active)
 
+  // Auto-create a conversation if none exists
+  useEffect(() => {
+    if (hasProvider && !history.activeId) {
+      history.createConversation({ resourceContext, viewContext })
+    }
+  }, [hasProvider, history.activeId])
+
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // Close history dropdown when clicking outside
+  useEffect(() => {
+    if (!showHistory) return
+    const handleClick = (e: MouseEvent) => {
+      if (historyRef.current && !historyRef.current.contains(e.target as Node)) {
+        setShowHistory(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showHistory])
 
   // Send initial message if provided (only once)
   useEffect(() => {
@@ -112,19 +139,27 @@ export function ChatTab({ resourceContext, viewContext, initialMessage }: ChatTa
   const handleSend = useCallback(async (content: string) => {
     if (isStreaming) return
 
+    // Ensure we have an active conversation
+    let currentId = history.activeId
+    if (!currentId) {
+      currentId = history.createConversation({ resourceContext, viewContext })
+    }
+
     const userMsg: DisplayMessage = {
-      id: `msg-${++messageIdCounter}`,
+      id: crypto.randomUUID(),
       role: 'user',
       content,
     }
 
     const assistantMsg: DisplayMessage = {
-      id: `msg-${++messageIdCounter}`,
+      id: crypto.randomUUID(),
       role: 'assistant',
       content: '',
     }
 
-    setMessages(prev => [...prev, userMsg, assistantMsg])
+    history.addMessage(userMsg)
+    history.addMessage(assistantMsg)
+    history.setStreaming(true)
     setIsStreaming(true)
 
     // Build chat messages for API (all previous messages + new user message)
@@ -144,81 +179,72 @@ export function ChatTab({ resourceContext, viewContext, initialMessage }: ChatTa
         // Handle tool call events
         if ('type' in event && event.type === 'tool_call') {
           const toolEvent = event as ToolCallEvent
-          setMessages(prev => {
-            const updated = [...prev]
-            const last = updated[updated.length - 1]
-            if (last && last.role === 'assistant') {
-              const existingCalls = last.toolCalls || []
-              updated[updated.length - 1] = {
-                ...last,
-                toolCalls: [...existingCalls, {
-                  id: toolEvent.toolCallId,
-                  name: toolEvent.name,
-                  arguments: toolEvent.arguments,
-                }],
-              }
-            }
-            return updated
-          })
+          history.updateLastMessage(last => ({
+            ...last,
+            toolCalls: [...(last.toolCalls || []), {
+              id: toolEvent.toolCallId,
+              name: toolEvent.name,
+              arguments: toolEvent.arguments,
+            }],
+          }))
           continue
         }
 
         // Handle tool result events
         if ('type' in event && event.type === 'tool_result') {
           const resultEvent = event as ToolResultEvent
-          setMessages(prev => {
-            const updated = [...prev]
-            const last = updated[updated.length - 1]
-            if (last && last.role === 'assistant' && last.toolCalls) {
-              const updatedCalls = last.toolCalls.map(tc =>
-                tc.id === resultEvent.toolCallId
-                  ? { ...tc, result: resultEvent.content, isError: resultEvent.isError }
-                  : tc
-              )
-              updated[updated.length - 1] = { ...last, toolCalls: updatedCalls }
-            }
-            return updated
-          })
+          history.updateLastMessage(last => ({
+            ...last,
+            toolCalls: last.toolCalls?.map(tc =>
+              tc.id === resultEvent.toolCallId
+                ? { ...tc, result: resultEvent.content, isError: resultEvent.isError }
+                : tc
+            ),
+          }))
           continue
         }
 
         // Handle content chunks
         if ('content' in event && event.content) {
-          setMessages(prev => {
-            const updated = [...prev]
-            const last = updated[updated.length - 1]
-            if (last && last.role === 'assistant') {
-              updated[updated.length - 1] = { ...last, content: last.content + event.content }
-            }
-            return updated
-          })
+          history.updateLastMessage(last => ({
+            ...last,
+            content: last.content + event.content,
+          }))
         }
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
         // User stopped generation
       } else {
-        setMessages(prev => {
-          const updated = [...prev]
-          const last = updated[updated.length - 1]
-          if (last && last.role === 'assistant') {
-            const errorText = last.content
-              ? `${last.content}\n\n---\n*Error: ${err.message}*`
-              : `*Error: ${err.message}*`
-            updated[updated.length - 1] = { ...last, content: errorText }
-          }
-          return updated
-        })
+        history.updateLastMessage(last => ({
+          ...last,
+          content: last.content
+            ? `${last.content}\n\n---\n*Error: ${err.message}*`
+            : `*Error: ${err.message}*`,
+        }))
       }
     } finally {
       setIsStreaming(false)
+      history.finalizeStreaming()
       abortControllerRef.current = null
     }
-  }, [messages, isStreaming, resourceContext, viewContext])
+  }, [messages, isStreaming, resourceContext, viewContext, history])
 
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort()
   }, [])
+
+  const handleNewChat = useCallback(() => {
+    if (isStreaming) return
+    history.createConversation({ resourceContext, viewContext })
+    setShowHistory(false)
+  }, [isStreaming, resourceContext, viewContext, history])
+
+  const handleSwitchConversation = useCallback((id: string) => {
+    if (isStreaming) return
+    history.setActiveId(id)
+    setShowHistory(false)
+  }, [isStreaming, history])
 
   // No provider configured - show setup guidance
   if (!loadingProviders && !hasProvider && !providerError) {
@@ -273,13 +299,45 @@ export function ChatTab({ resourceContext, viewContext, initialMessage }: ChatTa
             </span>
           )}
         </div>
-        <button
-          onClick={() => setShowSettings(!showSettings)}
-          className="p-1 text-slate-500 hover:text-slate-300 rounded hover:bg-slate-700"
-          title="Settings"
-        >
-          <Settings className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleNewChat}
+            disabled={isStreaming}
+            className="p-1 text-slate-500 hover:text-slate-300 rounded hover:bg-slate-700 disabled:opacity-50"
+            title="New conversation"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+          <div className="relative" ref={historyRef}>
+            <button
+              onClick={() => setShowHistory(!showHistory)}
+              className={clsx(
+                'p-1 rounded hover:bg-slate-700',
+                showHistory ? 'text-slate-300 bg-slate-700' : 'text-slate-500 hover:text-slate-300'
+              )}
+              title="Chat history"
+            >
+              <Clock className="w-3.5 h-3.5" />
+            </button>
+            {showHistory && (
+              <ConversationList
+                conversations={history.conversations}
+                activeId={history.activeId}
+                onSelect={handleSwitchConversation}
+                onDelete={history.deleteConversation}
+                onClearAll={history.clearAll}
+                onNew={handleNewChat}
+              />
+            )}
+          </div>
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            className="p-1 text-slate-500 hover:text-slate-300 rounded hover:bg-slate-700"
+            title="Settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Settings panel */}
@@ -370,6 +428,86 @@ export function ChatTab({ resourceContext, viewContext, initialMessage }: ChatTa
               : undefined
         }
       />
+    </div>
+  )
+}
+
+function ConversationList({
+  conversations,
+  activeId,
+  onSelect,
+  onDelete,
+  onClearAll,
+  onNew,
+}: {
+  conversations: { id: string; title: string; updatedAt: number; messages: any[] }[]
+  activeId: string | null
+  onSelect: (id: string) => void
+  onDelete: (id: string) => void
+  onClearAll: () => void
+  onNew: () => void
+}) {
+  return (
+    <div className="absolute right-0 top-full mt-1 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700">
+        <span className="text-xs font-medium text-slate-300">Chat History</span>
+        <button
+          onClick={onNew}
+          className="text-xs text-blue-400 hover:text-blue-300"
+        >
+          + New
+        </button>
+      </div>
+      <div className="max-h-60 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-600">
+        {conversations.length === 0 ? (
+          <p className="px-3 py-4 text-xs text-slate-500 text-center">No conversations yet</p>
+        ) : (
+          conversations.map(c => (
+            <div
+              key={c.id}
+              onClick={() => onSelect(c.id)}
+              className={clsx(
+                'flex items-center gap-2 px-3 py-2 cursor-pointer group',
+                c.id === activeId
+                  ? 'bg-slate-700/50'
+                  : 'hover:bg-slate-700/30'
+              )}
+            >
+              <div className="flex-1 min-w-0">
+                <p className={clsx(
+                  'text-xs truncate',
+                  c.id === activeId ? 'text-slate-200' : 'text-slate-400'
+                )}>
+                  {c.title}
+                </p>
+                <p className="text-[10px] text-slate-600">
+                  {c.messages.length} msgs &middot; {formatRelativeTime(c.updatedAt)}
+                </p>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDelete(c.id)
+                }}
+                className="p-0.5 rounded opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 hover:bg-slate-600"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+      {conversations.length > 1 && (
+        <div className="border-t border-slate-700 px-3 py-1.5">
+          <button
+            onClick={onClearAll}
+            className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-red-400"
+          >
+            <Trash2 className="w-3 h-3" />
+            Clear all
+          </button>
+        </div>
+      )}
     </div>
   )
 }

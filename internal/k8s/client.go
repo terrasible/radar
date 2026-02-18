@@ -424,8 +424,10 @@ func SwitchContext(name string) error {
 		return fmt.Errorf("failed to create dynamic client for context %q: %w", name, err)
 	}
 
-	// Update global variables atomically
+	// Update global variables atomically, capturing old config for transport cleanup
 	clientMu.Lock()
+	oldConfig := k8sConfig
+
 	k8sConfig = config
 	k8sClient = newK8sClient
 	discoveryClient = newDiscoveryClient
@@ -434,6 +436,18 @@ func SwitchContext(name string) error {
 	clusterName = ctx.Cluster
 	contextNamespace = ctx.Namespace
 	clientMu.Unlock()
+
+	// Close idle connections on the old transport to release HTTP/2 goroutines.
+	// After factory.Shutdown() (called in ResetAllSubsystems), no new requests use
+	// the old transport, but HTTP/2 goroutines may still be blocked on stale connections.
+	if oldConfig != nil {
+		if transport, err := rest.TransportFor(oldConfig); err == nil {
+			type idleCloser interface{ CloseIdleConnections() }
+			if ic, ok := transport.(idleCloser); ok {
+				ic.CloseIdleConnections()
+			}
+		}
+	}
 
 	return nil
 }

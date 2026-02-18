@@ -160,6 +160,10 @@ func TestClusterConnection(ctx context.Context) error {
 func PerformContextSwitch(newContext string) error {
 	log.Printf("Performing context switch to %q", newContext)
 
+	// Step 0: Stop the connection watchdog to prevent it from detecting
+	// teardown as a connection loss and triggering a concurrent reconnection
+	StopConnectionWatchdog()
+
 	// Step 1: Tear down all subsystems
 	reportProgress("Stopping caches...")
 	ResetAllSubsystems()
@@ -224,6 +228,12 @@ func PerformContextSwitch(newContext string) error {
 	for _, callback := range callbacks {
 		callback(newContext)
 	}
+
+	// Reset failure counter and restart watchdog for the new cluster
+	consecutiveFailuresMu.Lock()
+	consecutiveFailures = 0
+	consecutiveFailuresMu.Unlock()
+	StartConnectionWatchdog()
 
 	return nil
 }

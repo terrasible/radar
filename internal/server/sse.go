@@ -162,6 +162,10 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 			},
 		})
 
+		// Restart the resource change watcher for the new cache.
+		// The old watcher exited when the previous cache's changes channel was closed.
+		go b.watchResourceChanges()
+
 		// Broadcast the new topology so clients can complete the switch
 		// Run in goroutine to not block the context switch
 		log.Printf("SSE broadcaster: scheduling topology broadcast")
