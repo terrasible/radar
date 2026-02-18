@@ -23,6 +23,10 @@ export interface DockTab {
     name?: string
     group?: string
   }
+  viewContext?: {
+    page: string
+    namespaces?: string[]
+  }
   initialMessage?: string
 }
 
@@ -219,12 +223,17 @@ export function useOpenChat() {
       name?: string
       group?: string
     }
+    viewContext?: {
+      page: string
+      namespaces?: string[]
+    }
     initialMessage?: string
   }) => {
     addTab({
       type: 'ai-chat',
       title: 'AI Chat',
       resourceContext: opts?.resourceContext,
+      viewContext: opts?.viewContext,
       initialMessage: opts?.initialMessage,
     })
   }

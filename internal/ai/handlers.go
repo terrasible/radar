@@ -34,9 +34,10 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 
 // ChatRequest is the request body for /api/ai/chat
 type ChatRequest struct {
-	Messages []Message        `json:"messages"`
-	Model    string           `json:"model,omitempty"`
-	Context  *ResourceContext `json:"context,omitempty"`
+	Messages    []Message        `json:"messages"`
+	Model       string           `json:"model,omitempty"`
+	Context     *ResourceContext `json:"context,omitempty"`
+	ViewContext *ViewContext      `json:"viewContext,omitempty"`
 }
 
 // Maximum number of tool call rounds per chat request to prevent infinite loops
@@ -67,7 +68,7 @@ func (h *Handlers) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build system prompt with K8s context
-	systemPrompt := BuildSystemPrompt(r.Context(), req.Context)
+	systemPrompt := BuildSystemPrompt(r.Context(), req.Context, req.ViewContext)
 
 	// Prepend system message
 	messages := make([]Message, 0, len(req.Messages)+1)
@@ -102,9 +103,21 @@ func (h *Handlers) handleChat(w http.ResponseWriter, r *http.Request) {
 	tools := GetToolDefinitions()
 
 	// Update system prompt to mention tool capabilities
-	messages[0].Content += "\n\n## Available Tools\n\nYou have access to tools that can query the Kubernetes cluster directly. " +
-		"Use them to get accurate, real-time data instead of guessing. " +
-		"When a user asks about cluster state, pods, logs, events, or metrics, call the appropriate tool to get the data first, then explain what you found."
+	messages[0].Content += "\n\n## Available Tools\n\n" +
+		"You have access to tools that can query the Kubernetes cluster directly. " +
+		"ALWAYS use tools to get real data instead of guessing or suggesting kubectl commands.\n\n" +
+		"Tool guide:\n" +
+		"- **get_dashboard**: Start here for cluster health overview — resource counts, failing pods, warnings, Helm status\n" +
+		"- **list_resources**: List resources by kind (pods, deployments, services, etc.) with optional namespace filter\n" +
+		"- **get_resource**: Get detailed info about a specific resource (spec, status, conditions, events)\n" +
+		"- **get_pod_logs**: Fetch recent logs from a pod (specify container if multi-container)\n" +
+		"- **get_events**: Get Kubernetes events, optionally filtered by namespace or resource\n" +
+		"- **get_metrics**: Get CPU/memory metrics for a pod or node (requires metrics-server)\n" +
+		"- **get_topology**: Get the resource relationship graph — shows how resources connect\n" +
+		"- **list_namespaces**: List all namespaces in the cluster\n\n" +
+		"When a user asks about cluster state, pods, logs, events, metrics, or topology, " +
+		"call the appropriate tool first, then explain what you found. " +
+		"Chain multiple tools if needed (e.g., list_resources then get_pod_logs for a failing pod)."
 
 	h.streamWithTools(r, w, flusher, toolProvider, messages, tools, opts)
 }

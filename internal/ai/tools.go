@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,7 +14,9 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	aicontext "github.com/skyhook-io/radar/internal/ai/context"
+	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/topology"
 )
 
 // GetToolDefinitions returns the set of read-only tools available to the AI.
@@ -133,6 +136,37 @@ func GetToolDefinitions() []ToolDefinition {
 				"properties": map[string]any{},
 			},
 		},
+		{
+			Name:        "get_dashboard",
+			Description: "Get cluster health overview including resource counts, problems (failing pods, unhealthy deployments), recent warning events, and Helm release status. Start here to understand cluster state before drilling into specific resources.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"namespace": map[string]any{
+						"type":        "string",
+						"description": "Filter to a specific namespace (optional)",
+					},
+				},
+			},
+		},
+		{
+			Name:        "get_topology",
+			Description: "Get the topology graph showing relationships between Kubernetes resources. Returns nodes and edges representing Deployments, Services, Ingresses, Pods, etc. Use 'traffic' view for network flow or 'resources' view for ownership hierarchy.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"namespace": map[string]any{
+						"type":        "string",
+						"description": "Filter to a specific namespace (optional)",
+					},
+					"view": map[string]any{
+						"type":        "string",
+						"enum":        []string{"traffic", "resources"},
+						"description": "View mode: traffic for network flow, resources for ownership hierarchy (default: resources)",
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -177,6 +211,10 @@ func executeTool(ctx context.Context, name, argsJSON string) (string, bool) {
 		return executeGetMetrics(ctx, argsJSON)
 	case "list_namespaces":
 		return executeListNamespaces(ctx)
+	case "get_dashboard":
+		return executeGetDashboard(ctx, argsJSON)
+	case "get_topology":
+		return executeGetTopology(ctx, argsJSON)
 	default:
 		return fmt.Sprintf("unknown tool: %s", name), true
 	}
@@ -454,6 +492,363 @@ func executeListNamespaces(ctx context.Context) (string, bool) {
 	}
 
 	return marshalResult(result)
+}
+
+func executeGetDashboard(ctx context.Context, argsJSON string) (string, bool) {
+	var args struct {
+		Namespace string `json:"namespace"`
+	}
+	if argsJSON != "" && argsJSON != "{}" {
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return fmt.Sprintf("invalid arguments: %v", err), true
+		}
+	}
+
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return "not connected to cluster", true
+	}
+
+	dashboard := buildChatDashboard(ctx, cache, args.Namespace)
+	return marshalResult(dashboard)
+}
+
+func executeGetTopology(ctx context.Context, argsJSON string) (string, bool) {
+	var args struct {
+		Namespace string `json:"namespace"`
+		View      string `json:"view"`
+	}
+	if argsJSON != "" && argsJSON != "{}" {
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return fmt.Sprintf("invalid arguments: %v", err), true
+		}
+	}
+
+	opts := topology.DefaultBuildOptions()
+	if args.Namespace != "" {
+		opts.Namespaces = []string{args.Namespace}
+	}
+	if args.View == "traffic" {
+		opts.ViewMode = topology.ViewModeTraffic
+	}
+
+	builder := topology.NewBuilder()
+	topo, err := builder.Build(opts)
+	if err != nil {
+		return fmt.Sprintf("failed to build topology: %v", err), true
+	}
+
+	return marshalResult(topo)
+}
+
+// Dashboard builder types (ported from MCP for chat tool use)
+
+type chatDashboard struct {
+	Cluster        chatClusterInfo   `json:"cluster"`
+	Health         chatHealthSummary `json:"health"`
+	Problems       []chatProblem     `json:"problems"`
+	WarningEvents  int               `json:"warningEvents"`
+	TopWarnings    []chatWarning     `json:"topWarnings"`
+	HelmReleases   chatHelmSummary   `json:"helmReleases"`
+	TopologyNodes  int               `json:"topologyNodes"`
+	TopologyEdges  int               `json:"topologyEdges"`
+	ResourceCounts map[string]int    `json:"resourceCounts"`
+}
+
+type chatClusterInfo struct {
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Version  string `json:"version"`
+}
+
+type chatHealthSummary struct {
+	HealthyPods int `json:"healthyPods"`
+	WarningPods int `json:"warningPods"`
+	ErrorPods   int `json:"errorPods"`
+}
+
+type chatProblem struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	Reason    string `json:"reason"`
+	Age       string `json:"age"`
+}
+
+type chatWarning struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+	Count   int    `json:"count"`
+}
+
+type chatHelmSummary struct {
+	Total    int               `json:"total"`
+	Releases []chatHelmRelease `json:"releases,omitempty"`
+}
+
+type chatHelmRelease struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Chart     string `json:"chart"`
+	Status    string `json:"status"`
+}
+
+func buildChatDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string) chatDashboard {
+	d := chatDashboard{
+		ResourceCounts: make(map[string]int),
+	}
+
+	// Cluster info
+	if info, err := k8s.GetClusterInfo(ctx); err == nil {
+		d.Cluster = chatClusterInfo{
+			Name:     info.Cluster,
+			Platform: info.Platform,
+			Version:  info.KubernetesVersion,
+		}
+	}
+
+	now := time.Now()
+
+	// Pod health
+	if podLister := cache.Pods(); podLister != nil {
+		var pods []*corev1.Pod
+		if namespace != "" {
+			pods, _ = podLister.Pods(namespace).List(labels.Everything())
+		} else {
+			pods, _ = podLister.List(labels.Everything())
+		}
+		d.ResourceCounts["pods"] = len(pods)
+		for _, pod := range pods {
+			switch chatClassifyPodHealth(pod, now) {
+			case "healthy":
+				d.Health.HealthyPods++
+			case "warning":
+				d.Health.WarningPods++
+			case "error":
+				d.Health.ErrorPods++
+				if len(d.Problems) < 10 {
+					d.Problems = append(d.Problems, chatProblem{
+						Kind:      "Pod",
+						Namespace: pod.Namespace,
+						Name:      pod.Name,
+						Reason:    chatPodProblemReason(pod),
+						Age:       formatAge(now.Sub(pod.CreationTimestamp.Time)),
+					})
+				}
+			}
+		}
+	}
+
+	// Deployment problems
+	if cache.Deployments() != nil {
+		if namespace != "" {
+			items, _ := cache.Deployments().Deployments(namespace).List(labels.Everything())
+			d.ResourceCounts["deployments"] = len(items)
+			for _, dep := range items {
+				if dep.Status.UnavailableReplicas > 0 && len(d.Problems) < 10 {
+					d.Problems = append(d.Problems, chatProblem{
+						Kind:      "Deployment",
+						Namespace: dep.Namespace,
+						Name:      dep.Name,
+						Reason:    fmt.Sprintf("%d/%d available", dep.Status.AvailableReplicas, dep.Status.Replicas),
+						Age:       formatAge(now.Sub(dep.CreationTimestamp.Time)),
+					})
+				}
+			}
+		} else {
+			items, _ := cache.Deployments().List(labels.Everything())
+			d.ResourceCounts["deployments"] = len(items)
+			for _, dep := range items {
+				if dep.Status.UnavailableReplicas > 0 && len(d.Problems) < 10 {
+					d.Problems = append(d.Problems, chatProblem{
+						Kind:      "Deployment",
+						Namespace: dep.Namespace,
+						Name:      dep.Name,
+						Reason:    fmt.Sprintf("%d/%d available", dep.Status.AvailableReplicas, dep.Status.Replicas),
+						Age:       formatAge(now.Sub(dep.CreationTimestamp.Time)),
+					})
+				}
+			}
+		}
+	}
+
+	// Simple resource counts
+	chatCountResources(cache, namespace, &d)
+
+	// Warning events
+	if eventLister := cache.Events(); eventLister != nil {
+		var events []*corev1.Event
+		if namespace != "" {
+			events, _ = eventLister.Events(namespace).List(labels.Everything())
+		} else {
+			events, _ = eventLister.List(labels.Everything())
+		}
+
+		var warnings []*corev1.Event
+		for _, e := range events {
+			if e.Type == "Warning" {
+				warnings = append(warnings, e)
+			}
+		}
+		d.WarningEvents = len(warnings)
+
+		sort.Slice(warnings, func(i, j int) bool {
+			ti := warnings[i].LastTimestamp.Time
+			tj := warnings[j].LastTimestamp.Time
+			if ti.IsZero() {
+				ti = warnings[i].CreationTimestamp.Time
+			}
+			if tj.IsZero() {
+				tj = warnings[j].CreationTimestamp.Time
+			}
+			return ti.After(tj)
+		})
+		limit := 5
+		if len(warnings) < limit {
+			limit = len(warnings)
+		}
+		for _, e := range warnings[:limit] {
+			count := int(e.Count)
+			if count < 1 {
+				count = 1
+			}
+			d.TopWarnings = append(d.TopWarnings, chatWarning{
+				Reason:  e.Reason,
+				Message: truncate(e.Message, 200),
+				Count:   count,
+			})
+		}
+	}
+
+	// Helm releases
+	if helmClient := helm.GetClient(); helmClient != nil {
+		releases, err := helmClient.ListReleases(namespace)
+		if err == nil {
+			d.HelmReleases.Total = len(releases)
+			limit := 5
+			if len(releases) < limit {
+				limit = len(releases)
+			}
+			for _, r := range releases[:limit] {
+				d.HelmReleases.Releases = append(d.HelmReleases.Releases, chatHelmRelease{
+					Name:      r.Name,
+					Namespace: r.Namespace,
+					Chart:     r.Chart,
+					Status:    r.Status,
+				})
+			}
+		}
+	}
+
+	// Topology summary
+	topoOpts := topology.DefaultBuildOptions()
+	if namespace != "" {
+		topoOpts.Namespaces = []string{namespace}
+	}
+	builder := topology.NewBuilder()
+	if topo, err := builder.Build(topoOpts); err == nil {
+		d.TopologyNodes = len(topo.Nodes)
+		d.TopologyEdges = len(topo.Edges)
+	}
+
+	return d
+}
+
+func chatCountResources(cache *k8s.ResourceCache, namespace string, d *chatDashboard) {
+	if svcLister := cache.Services(); svcLister != nil {
+		if namespace != "" {
+			items, _ := svcLister.Services(namespace).List(labels.Everything())
+			d.ResourceCounts["services"] = len(items)
+		} else {
+			items, _ := svcLister.List(labels.Everything())
+			d.ResourceCounts["services"] = len(items)
+		}
+	}
+	if ssLister := cache.StatefulSets(); ssLister != nil {
+		if namespace != "" {
+			items, _ := ssLister.StatefulSets(namespace).List(labels.Everything())
+			d.ResourceCounts["statefulsets"] = len(items)
+		} else {
+			items, _ := ssLister.List(labels.Everything())
+			d.ResourceCounts["statefulsets"] = len(items)
+		}
+	}
+	if dsLister := cache.DaemonSets(); dsLister != nil {
+		if namespace != "" {
+			items, _ := dsLister.DaemonSets(namespace).List(labels.Everything())
+			d.ResourceCounts["daemonsets"] = len(items)
+		} else {
+			items, _ := dsLister.List(labels.Everything())
+			d.ResourceCounts["daemonsets"] = len(items)
+		}
+	}
+	if jobLister := cache.Jobs(); jobLister != nil {
+		if namespace != "" {
+			items, _ := jobLister.Jobs(namespace).List(labels.Everything())
+			d.ResourceCounts["jobs"] = len(items)
+		} else {
+			items, _ := jobLister.List(labels.Everything())
+			d.ResourceCounts["jobs"] = len(items)
+		}
+	}
+	if cjLister := cache.CronJobs(); cjLister != nil {
+		if namespace != "" {
+			items, _ := cjLister.CronJobs(namespace).List(labels.Everything())
+			d.ResourceCounts["cronjobs"] = len(items)
+		} else {
+			items, _ := cjLister.List(labels.Everything())
+			d.ResourceCounts["cronjobs"] = len(items)
+		}
+	}
+	if nsLister := cache.Namespaces(); nsLister != nil {
+		items, _ := nsLister.List(labels.Everything())
+		d.ResourceCounts["namespaces"] = len(items)
+	}
+	if nodeLister := cache.Nodes(); nodeLister != nil {
+		items, _ := nodeLister.List(labels.Everything())
+		d.ResourceCounts["nodes"] = len(items)
+	}
+}
+
+func chatClassifyPodHealth(pod *corev1.Pod, now time.Time) string {
+	if pod.Status.Phase == corev1.PodSucceeded {
+		return "healthy"
+	}
+	if pod.Status.Phase == corev1.PodFailed {
+		return "error"
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Waiting != nil {
+			reason := cs.State.Waiting.Reason
+			if reason == "CrashLoopBackOff" || reason == "ImagePullBackOff" || reason == "ErrImagePull" || reason == "CreateContainerConfigError" {
+				return "error"
+			}
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
+			return "error"
+		}
+	}
+	if pod.Status.Phase == corev1.PodPending && now.Sub(pod.CreationTimestamp.Time) > 5*time.Minute {
+		return "warning"
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.RestartCount > 3 {
+			return "warning"
+		}
+	}
+	return "healthy"
+}
+
+func chatPodProblemReason(pod *corev1.Pod) string {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			return cs.State.Waiting.Reason
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.Reason != "" {
+			return cs.State.Terminated.Reason
+		}
+	}
+	return string(pod.Status.Phase)
 }
 
 func marshalResult(data any) (string, bool) {

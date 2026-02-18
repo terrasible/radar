@@ -215,6 +215,7 @@ function TabContent({ tab, isActive }: { tab: DockTab; isActive: boolean }) {
     return (
       <ChatTab
         resourceContext={tab.resourceContext}
+        viewContext={tab.viewContext}
         initialMessage={tab.initialMessage}
       />
     )

@@ -18,10 +18,16 @@ export interface ResourceContext {
   group?: string
 }
 
+export interface ViewContext {
+  page: string
+  namespaces?: string[]
+}
+
 export interface ChatRequest {
   messages: ChatMessage[]
   model?: string
   context?: ResourceContext
+  viewContext?: ViewContext
 }
 
 export interface StreamChunk {

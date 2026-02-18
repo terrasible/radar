@@ -16,8 +16,14 @@ import (
 
 const maxContextLen = 8000 // Max characters for K8s context in system prompt
 
+// ViewContext describes what the user is currently viewing in the UI
+type ViewContext struct {
+	Page       string   `json:"page"`
+	Namespaces []string `json:"namespaces,omitempty"`
+}
+
 // BuildSystemPrompt constructs the system prompt with K8s context
-func BuildSystemPrompt(ctx context.Context, resourceCtx *ResourceContext) string {
+func BuildSystemPrompt(ctx context.Context, resourceCtx *ResourceContext, viewCtx *ViewContext) string {
 	var sb strings.Builder
 
 	sb.WriteString("You are Radar AI, an expert Kubernetes assistant integrated into the Radar dashboard. ")
@@ -25,7 +31,7 @@ func BuildSystemPrompt(ctx context.Context, resourceCtx *ResourceContext) string
 	sb.WriteString("Guidelines:\n")
 	sb.WriteString("- Be concise and actionable\n")
 	sb.WriteString("- Reference specific resources by name when possible\n")
-	sb.WriteString("- Suggest kubectl commands when relevant\n")
+	sb.WriteString("- When you have tools available, use them to get real data instead of suggesting kubectl commands\n")
 	sb.WriteString("- Format code blocks with ```\n")
 	sb.WriteString("- If you don't have enough info, ask the user to provide more context\n\n")
 
@@ -45,6 +51,16 @@ func BuildSystemPrompt(ctx context.Context, resourceCtx *ResourceContext) string
 			sb.WriteString(resCtx)
 			sb.WriteString("\n")
 		}
+	}
+
+	// Add view context
+	if viewCtx != nil && viewCtx.Page != "" {
+		sb.WriteString("\n## Current View\n\n")
+		sb.WriteString(fmt.Sprintf("The user is currently on the '%s' page.", viewCtx.Page))
+		if len(viewCtx.Namespaces) > 0 {
+			sb.WriteString(fmt.Sprintf(" Filtered to namespaces: %s.", strings.Join(viewCtx.Namespaces, ", ")))
+		}
+		sb.WriteString("\n")
 	}
 
 	return sb.String()
@@ -152,8 +168,8 @@ func gatherResourceContext(ctx context.Context, rc *ResourceContext) string {
 
 	kind := strings.ToLower(rc.Kind)
 
-	// Get pod details for pod-related queries
-	if kind == "pod" || kind == "pods" {
+	switch {
+	case kind == "pod" || kind == "pods":
 		if podLister := cache.Pods(); podLister != nil {
 			pod, err := podLister.Pods(rc.Namespace).Get(rc.Name)
 			if err == nil {
@@ -173,29 +189,7 @@ func gatherResourceContext(ctx context.Context, rc *ResourceContext) string {
 					parts = append(parts, fmt.Sprintf("Container %s: %s, restarts: %d", cs.Name, status, cs.RestartCount))
 				}
 
-				// Pod events
-				if eventLister := cache.Events(); eventLister != nil {
-					events, _ := eventLister.Events(rc.Namespace).List(labels.Everything())
-					var podEvents []string
-					for _, e := range events {
-						if e.InvolvedObject.Name == rc.Name && e.InvolvedObject.Kind == "Pod" {
-							ts := e.LastTimestamp.Time
-							if ts.IsZero() {
-								ts = e.CreationTimestamp.Time
-							}
-							podEvents = append(podEvents, fmt.Sprintf("  [%s] %s: %s (%s)",
-								e.Type, e.Reason, truncate(e.Message, 100), formatAge(time.Since(ts))))
-						}
-					}
-					if len(podEvents) > 0 {
-						limit := 10
-						if len(podEvents) < limit {
-							limit = len(podEvents)
-						}
-						parts = append(parts, "\nRecent events:")
-						parts = append(parts, podEvents[:limit]...)
-					}
-				}
+				appendResourceEvents(cache, rc, &parts)
 
 				// Get last few log lines
 				logs := getPodLogs(ctx, rc.Namespace, rc.Name, pod)
@@ -203,6 +197,89 @@ func gatherResourceContext(ctx context.Context, rc *ResourceContext) string {
 					parts = append(parts, "\nRecent logs:")
 					parts = append(parts, logs)
 				}
+			}
+		}
+
+	case kind == "deployment" || kind == "deployments":
+		if lister := cache.Deployments(); lister != nil {
+			dep, err := lister.Deployments(rc.Namespace).Get(rc.Name)
+			if err == nil {
+				parts = append(parts, fmt.Sprintf("Replicas: %d desired, %d ready, %d available, %d unavailable",
+					derefInt32(dep.Spec.Replicas, 1), dep.Status.ReadyReplicas, dep.Status.AvailableReplicas, dep.Status.UnavailableReplicas))
+				for _, cond := range dep.Status.Conditions {
+					parts = append(parts, fmt.Sprintf("Condition %s: %s (%s)", cond.Type, cond.Status, cond.Reason))
+				}
+				appendResourceEvents(cache, rc, &parts)
+			}
+		}
+
+	case kind == "service" || kind == "services":
+		if lister := cache.Services(); lister != nil {
+			svc, err := lister.Services(rc.Namespace).Get(rc.Name)
+			if err == nil {
+				parts = append(parts, fmt.Sprintf("Type: %s, ClusterIP: %s", svc.Spec.Type, svc.Spec.ClusterIP))
+				for _, port := range svc.Spec.Ports {
+					parts = append(parts, fmt.Sprintf("Port: %s %d/%s -> %d", port.Name, port.Port, port.Protocol, port.TargetPort.IntValue()))
+				}
+				if svc.Spec.Selector != nil {
+					selParts := make([]string, 0, len(svc.Spec.Selector))
+					for k, v := range svc.Spec.Selector {
+						selParts = append(selParts, k+"="+v)
+					}
+					parts = append(parts, fmt.Sprintf("Selector: %s", strings.Join(selParts, ", ")))
+				}
+				appendResourceEvents(cache, rc, &parts)
+			}
+		}
+
+	case kind == "statefulset" || kind == "statefulsets":
+		if lister := cache.StatefulSets(); lister != nil {
+			sts, err := lister.StatefulSets(rc.Namespace).Get(rc.Name)
+			if err == nil {
+				parts = append(parts, fmt.Sprintf("Replicas: %d desired, %d ready, %d current",
+					derefInt32(sts.Spec.Replicas, 1), sts.Status.ReadyReplicas, sts.Status.CurrentReplicas))
+				appendResourceEvents(cache, rc, &parts)
+			}
+		}
+
+	case kind == "daemonset" || kind == "daemonsets":
+		if lister := cache.DaemonSets(); lister != nil {
+			ds, err := lister.DaemonSets(rc.Namespace).Get(rc.Name)
+			if err == nil {
+				parts = append(parts, fmt.Sprintf("Desired: %d, Current: %d, Ready: %d, Unavailable: %d",
+					ds.Status.DesiredNumberScheduled, ds.Status.CurrentNumberScheduled,
+					ds.Status.NumberReady, ds.Status.NumberUnavailable))
+				appendResourceEvents(cache, rc, &parts)
+			}
+		}
+
+	case kind == "job" || kind == "jobs":
+		if lister := cache.Jobs(); lister != nil {
+			job, err := lister.Jobs(rc.Namespace).Get(rc.Name)
+			if err == nil {
+				status := "Running"
+				for _, cond := range job.Status.Conditions {
+					if cond.Status == corev1.ConditionTrue {
+						status = string(cond.Type)
+						break
+					}
+				}
+				parts = append(parts, fmt.Sprintf("Status: %s, Succeeded: %d, Failed: %d",
+					status, job.Status.Succeeded, job.Status.Failed))
+				appendResourceEvents(cache, rc, &parts)
+			}
+		}
+
+	case kind == "cronjob" || kind == "cronjobs":
+		if lister := cache.CronJobs(); lister != nil {
+			cj, err := lister.CronJobs(rc.Namespace).Get(rc.Name)
+			if err == nil {
+				parts = append(parts, fmt.Sprintf("Schedule: %s, Suspend: %v, Active: %d",
+					cj.Spec.Schedule, derefBool(cj.Spec.Suspend), len(cj.Status.Active)))
+				if cj.Status.LastScheduleTime != nil {
+					parts = append(parts, fmt.Sprintf("Last scheduled: %s ago", formatAge(time.Since(cj.Status.LastScheduleTime.Time))))
+				}
+				appendResourceEvents(cache, rc, &parts)
 			}
 		}
 	}
@@ -279,4 +356,46 @@ func formatAge(d time.Duration) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// appendResourceEvents appends recent K8s events for the given resource
+func appendResourceEvents(cache *k8s.ResourceCache, rc *ResourceContext, parts *[]string) {
+	eventLister := cache.Events()
+	if eventLister == nil {
+		return
+	}
+	events, _ := eventLister.Events(rc.Namespace).List(labels.Everything())
+	var resEvents []string
+	for _, e := range events {
+		if e.InvolvedObject.Name == rc.Name {
+			ts := e.LastTimestamp.Time
+			if ts.IsZero() {
+				ts = e.CreationTimestamp.Time
+			}
+			resEvents = append(resEvents, fmt.Sprintf("  [%s] %s: %s (%s)",
+				e.Type, e.Reason, truncate(e.Message, 100), formatAge(time.Since(ts))))
+		}
+	}
+	if len(resEvents) > 0 {
+		limit := 10
+		if len(resEvents) < limit {
+			limit = len(resEvents)
+		}
+		*parts = append(*parts, "\nRecent events:")
+		*parts = append(*parts, resEvents[:limit]...)
+	}
+}
+
+func derefInt32(p *int32, fallback int32) int32 {
+	if p != nil {
+		return *p
+	}
+	return fallback
+}
+
+func derefBool(p *bool) bool {
+	if p != nil {
+		return *p
+	}
+	return false
 }

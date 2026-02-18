@@ -1,13 +1,14 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
-import { Bot, AlertCircle, Settings } from 'lucide-react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { Bot, AlertCircle, Settings, Sparkles } from 'lucide-react'
 import { ChatMessage } from './ChatMessage'
 import type { ToolCallInfo } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import { streamChat, useAIProviders, useSetAIProvider } from '../../api/ai'
-import type { ChatMessage as ChatMessageType, ResourceContext, ToolCallEvent, ToolResultEvent } from '../../api/ai'
+import type { ChatMessage as ChatMessageType, ResourceContext, ViewContext, ToolCallEvent, ToolResultEvent } from '../../api/ai'
 
 interface ChatTabProps {
   resourceContext?: ResourceContext
+  viewContext?: ViewContext
   initialMessage?: string
 }
 
@@ -18,9 +19,70 @@ interface DisplayMessage {
   toolCalls?: ToolCallInfo[]
 }
 
+function getSuggestedQuestions(
+  resourceContext?: ResourceContext,
+  viewContext?: ViewContext
+): string[] {
+  const kind = resourceContext?.kind?.toLowerCase()
+  const name = resourceContext?.name
+
+  if (kind && name) {
+    switch (kind) {
+      case 'pod':
+      case 'pods':
+        return [
+          `Why is ${name} failing?`,
+          `Show logs for ${name}`,
+          `What events happened for ${name}?`,
+          `Check resource usage for ${name}`,
+        ]
+      case 'deployment':
+      case 'deployments':
+        return [
+          `What's the status of ${name}?`,
+          `Are all replicas healthy for ${name}?`,
+          `Show recent events for ${name}`,
+          `List pods for ${name}`,
+        ]
+      case 'service':
+      case 'services':
+        return [
+          `What pods does ${name} route to?`,
+          `Show the topology around ${name}`,
+          `Any issues with ${name}?`,
+          `What endpoints does ${name} have?`,
+        ]
+      default:
+        return [
+          `Tell me about ${kind} ${name}`,
+          `Show events for ${name}`,
+          `What's the current status of ${name}?`,
+          `Any issues with ${name}?`,
+        ]
+    }
+  }
+
+  const page = viewContext?.page?.toLowerCase()
+  if (page) {
+    if (page.includes('topology'))
+      return ['Show overall cluster topology', 'Any unhealthy resources?', 'What services are exposed?', 'Show traffic flow']
+    if (page.includes('helm'))
+      return ['What Helm releases are installed?', 'Any failed Helm releases?', 'Show cluster dashboard', 'List namespaces']
+    if (page.includes('timeline'))
+      return ['Show recent warning events', 'What changed in the last hour?', 'Any failing pods?', 'Show cluster health']
+  }
+
+  return [
+    "What's the health of my cluster?",
+    'Show failing pods',
+    'List recent warning events',
+    'What namespaces are running?',
+  ]
+}
+
 let messageIdCounter = 0
 
-export function ChatTab({ resourceContext, initialMessage }: ChatTabProps) {
+export function ChatTab({ resourceContext, viewContext, initialMessage }: ChatTabProps) {
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -76,7 +138,7 @@ export function ChatTab({ resourceContext, initialMessage }: ChatTabProps) {
 
     try {
       for await (const event of streamChat(
-        { messages: chatMessages, context: resourceContext },
+        { messages: chatMessages, context: resourceContext, viewContext },
         controller.signal
       )) {
         // Handle tool call events
@@ -152,7 +214,7 @@ export function ChatTab({ resourceContext, initialMessage }: ChatTabProps) {
       setIsStreaming(false)
       abortControllerRef.current = null
     }
-  }, [messages, isStreaming, resourceContext])
+  }, [messages, isStreaming, resourceContext, viewContext])
 
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort()
@@ -273,13 +335,11 @@ export function ChatTab({ resourceContext, initialMessage }: ChatTabProps) {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700">
         {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-500 p-6">
-            <Bot className="w-8 h-8 mb-2 text-slate-600" />
-            <p className="text-sm">Ask me anything about your cluster</p>
-            <p className="text-xs mt-1 text-slate-600">
-              I can query pods, logs, events, and metrics directly
-            </p>
-          </div>
+          <EmptyState
+            resourceContext={resourceContext}
+            viewContext={viewContext}
+            onSuggestionClick={handleSend}
+          />
         ) : (
           <>
             {messages.map((msg, idx) => (
@@ -310,6 +370,45 @@ export function ChatTab({ resourceContext, initialMessage }: ChatTabProps) {
               : undefined
         }
       />
+    </div>
+  )
+}
+
+function EmptyState({
+  resourceContext,
+  viewContext,
+  onSuggestionClick,
+}: {
+  resourceContext?: ResourceContext
+  viewContext?: ViewContext
+  onSuggestionClick: (text: string) => void
+}) {
+  const suggestions = useMemo(
+    () => getSuggestedQuestions(resourceContext, viewContext),
+    [resourceContext, viewContext]
+  )
+
+  return (
+    <div className="h-full flex flex-col items-center justify-center text-slate-500 p-6">
+      <Bot className="w-8 h-8 mb-2 text-slate-600" />
+      <p className="text-sm mb-1">Ask me anything about your cluster</p>
+      <p className="text-xs text-slate-600 mb-4">
+        I can query pods, logs, events, metrics, and topology directly
+      </p>
+      <div className="flex flex-wrap gap-2 justify-center max-w-lg">
+        {suggestions.map(q => (
+          <button
+            key={q}
+            onClick={() => onSuggestionClick(q)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-slate-700 bg-slate-800/50
+              text-xs text-slate-300 hover:bg-slate-700 hover:text-slate-100 hover:border-slate-600
+              transition-colors"
+          >
+            <Sparkles className="w-3 h-3 text-amber-400" />
+            {q}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
