@@ -13,6 +13,9 @@ import { ResourceDetailDrawer } from './components/resources/ResourceDetailDrawe
 import { ResourceDetailPage } from './components/resource/ResourceDetailPage'
 import { HelmView } from './components/helm/HelmView'
 import { TrafficView } from './components/traffic/TrafficView'
+import { ScannerView } from './components/scanner/ScannerView'
+import { DeprecatedAPIsView } from './components/home/DeprecatedAPIsView'
+import { ArgoDashboardView } from './components/argo/ArgoDashboardView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardManager, usePortForwardCount } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock, useOpenChat } from './components/dock'
@@ -27,10 +30,10 @@ import { NamespaceSelector } from './components/ui/NamespaceSelector'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { useEventSource } from './hooks/useEventSource'
 import { useNamespaces } from './api/client'
-import { Loader2, RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon, Activity, Home, MessageCircle } from 'lucide-react'
-import { useTheme } from './context/ThemeContext'
+import { Loader2, RefreshCw, FolderTree, Network, List, Clock, Package, Palette, Check, Activity, Home, MessageCircle, ShieldCheck, GitBranch } from 'lucide-react'
+import { useTheme, THEMES, THEME_META } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
-import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, Topology } from './types'
+import type { TopologyNode, GroupingMode, SelectedResource, SelectedHelmRelease, NodeKind, Topology, ExtendedMainView } from './types'
 import { kindToPlural } from './utils/navigation'
 
 // All possible node kinds (core + GitOps)
@@ -84,9 +87,6 @@ function encodeResourceParam(resource: SelectedResource): string {
   return `${resource.kind}/${resource.namespace}/${resource.name}`
 }
 
-// Extended MainView type that includes traffic
-type ExtendedMainView = MainView | 'traffic'
-
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
   const path = pathname.replace(/^\//, '').split('/')[0]
@@ -96,6 +96,9 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'timeline') return 'timeline'
   if (path === 'helm') return 'helm'
   if (path === 'traffic') return 'traffic'
+  if (path === 'scanner') return 'scanner'
+  if (path === 'deprecated-apis') return 'deprecated-apis'
+  if (path === 'argo') return 'argo'
   return 'home'
 }
 
@@ -454,6 +457,8 @@ function AppInner() {
             { view: 'timeline' as const, icon: Clock, label: 'Timeline' },
             { view: 'helm' as const, icon: Package, label: 'Helm' },
             { view: 'traffic' as const, icon: Activity, label: 'Traffic' },
+            { view: 'scanner' as const, icon: ShieldCheck, label: 'Scanner' },
+            { view: 'argo' as const, icon: GitBranch, label: 'ArgoCD' },
           ] as const).map(({ view, icon: Icon, label }) => (
             <Tooltip key={view} content={label} delay={100} position="bottom">
               <button
@@ -500,8 +505,8 @@ function AppInner() {
             </button>
           </Tooltip>
 
-          {/* Theme toggle */}
-          <ThemeToggle />
+          {/* Theme picker */}
+          <ThemePicker />
         </div>
       </header>
 
@@ -758,6 +763,21 @@ function AppInner() {
           <TrafficView namespaces={namespaces} />
         )}
 
+        {/* Scanner view */}
+        {mainView === 'scanner' && (
+          <ScannerView />
+        )}
+
+        {/* Deprecated APIs view */}
+        {mainView === 'deprecated-apis' && (
+          <DeprecatedAPIsView onBack={() => setMainView('home')} />
+        )}
+
+        {/* ArgoCD dashboard view */}
+        {mainView === 'argo' && (
+          <ArgoDashboardView />
+        )}
+
         </ErrorBoundary>
       </div>}
 
@@ -827,29 +847,72 @@ function App() {
 // Skyhook logo that switches based on theme
 function Logo() {
   const { theme } = useTheme()
-  const logoSrc = theme === 'dark'
+  const isDark = THEME_META[theme].baseScheme === 'dark'
+  const logoSrc = isDark
     ? '/assets/skyhook/logotype-white-color.svg'
     : '/assets/skyhook/logotype-dark-color.svg'
 
   return <img src={logoSrc} alt="Skyhook" className="h-5 w-auto" />
 }
 
-// Theme toggle button component
-function ThemeToggle() {
-  const { theme, toggleTheme } = useTheme()
+// Theme picker dropdown component
+function ThemePicker() {
+  const { theme, setTheme } = useTheme()
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [open])
 
   return (
-    <button
-      onClick={toggleTheme}
-      className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-      title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-    >
-      {theme === 'dark' ? (
-        <Sun className="w-4 h-4" />
-      ) : (
-        <Moon className="w-4 h-4" />
+    <div className="relative" ref={ref}>
+      <Tooltip content="Theme">
+        <button
+          onClick={() => setOpen(!open)}
+          className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+        >
+          <Palette className="w-4 h-4" />
+        </button>
+      </Tooltip>
+      {open && (
+        <div className="absolute right-0 top-full mt-1.5 w-48 bg-theme-surface border border-theme-border rounded-lg shadow-theme-lg z-50 py-1 overflow-hidden">
+          {THEMES.map((t) => {
+            const meta = THEME_META[t]
+            const isActive = t === theme
+            return (
+              <button
+                key={t}
+                onClick={() => { setTheme(t); setOpen(false) }}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors ${
+                  isActive ? 'bg-accent-muted text-accent-text' : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
+                }`}
+              >
+                <div className="flex items-center gap-1 shrink-0">
+                  <span className="w-3 h-3 rounded-full border border-white/10" style={{ background: meta.colors.base }} />
+                  <span className="w-3 h-3 rounded-full border border-white/10" style={{ background: meta.colors.surface }} />
+                  <span className="w-3 h-3 rounded-full border border-white/10" style={{ background: meta.colors.accent }} />
+                </div>
+                <span className="text-xs font-medium flex-1">{meta.label}</span>
+                {isActive && <Check className="w-3.5 h-3.5 text-accent shrink-0" />}
+              </button>
+            )
+          })}
+        </div>
       )}
-    </button>
+    </div>
   )
 }
 

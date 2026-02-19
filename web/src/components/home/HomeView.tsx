@@ -1,4 +1,4 @@
-import { useDashboard, useDashboardCRDs } from '../../api/client'
+import { useDashboard, useDashboardCRDs, useDeprecatedAPIs } from '../../api/client'
 import type { DashboardResponse } from '../../api/client'
 import type { ExtendedMainView, Topology, SelectedResource } from '../../types'
 import { kindToPlural } from '../../utils/navigation'
@@ -8,6 +8,9 @@ import { ActivitySummary } from './ActivitySummary'
 import { TrafficSummary } from './TrafficSummary'
 import { CertificateHealthCard } from './CertificateHealthCard'
 import { ClusterHealthCard } from './ClusterHealthCard'
+import { DeprecatedAPIBanner } from './DeprecatedAPIBanner'
+import { ArgoSummary } from './ArgoSummary'
+import { ScannerDashboardCard } from '../scanner/ScannerDashboardCard'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
 
@@ -23,6 +26,8 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
   const { data, isLoading, error, dataUpdatedAt } = useDashboard(namespaces)
   // CRDs load lazily after main dashboard to keep initial load fast
   const { data: crdsData } = useDashboardCRDs(namespaces)
+  // Deprecated APIs loaded lazily
+  const { data: deprecatedData } = useDeprecatedAPIs()
 
   if (isLoading && !data) {
     return (
@@ -59,6 +64,14 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
               Showing cached data from {new Date(dataUpdatedAt).toLocaleTimeString()} — live updates unavailable
             </span>
           </div>
+        )}
+
+        {/* Deprecated API warning banner */}
+        {deprecatedData && (deprecatedData.totalDeprecated > 0 || deprecatedData.totalRemoved > 0) && (
+          <DeprecatedAPIBanner
+            data={deprecatedData}
+            onNavigate={() => onNavigateToView('deprecated-apis')}
+          />
         )}
 
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
@@ -104,6 +117,15 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
               <CertificateHealthCard
                 data={data.certificateHealth}
                 onNavigate={() => onNavigateToResourceKind('Secret', undefined, { type: 'TLS' })}
+              />
+            )}
+            <ScannerDashboardCard
+              onNavigate={() => onNavigateToView('scanner')}
+            />
+            {data.argoSummary && (
+              <ArgoSummary
+                data={data.argoSummary}
+                onNavigate={() => onNavigateToView('argo')}
               />
             )}
           </div>

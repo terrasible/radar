@@ -128,7 +128,16 @@ export function ChatTab({ resourceContext, viewContext, initialMessage }: ChatTa
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showHistory])
 
-  // Send initial message if provided (only once)
+  // Reset initialSentRef when initialMessage changes (e.g., new "Ask AI" click)
+  const prevInitialMessageRef = useRef(initialMessage)
+  useEffect(() => {
+    if (initialMessage && initialMessage !== prevInitialMessageRef.current) {
+      initialSentRef.current = false
+      prevInitialMessageRef.current = initialMessage
+    }
+  }, [initialMessage])
+
+  // Send initial message if provided (only once per unique message)
   useEffect(() => {
     if (initialMessage && !initialSentRef.current && hasProvider) {
       initialSentRef.current = true

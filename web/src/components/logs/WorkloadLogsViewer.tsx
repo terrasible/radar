@@ -9,6 +9,7 @@ import {
   highlightSearchMatches,
   escapeHtml,
 } from '../../utils/log-format'
+import { AskAIButton } from './AskAIButton'
 
 interface LogLine {
   timestamp: string
@@ -277,6 +278,12 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
     return lines
   }, [logLines, selectedPods, searchQuery])
 
+  // Get log content for AI analysis
+  const getLogContent = useCallback((maxLines: number) => {
+    const lines = filteredLines.slice(-maxLines)
+    return lines.map(l => `${l.timestamp} [${l.pod}] ${l.content}`).join('\n')
+  }, [filteredLines])
+
   return (
     <div className="flex flex-col h-full bg-theme-base">
       {/* Toolbar */}
@@ -472,20 +479,28 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
         )}
       </div>
 
-      {/* Auto-scroll indicator */}
-      {!autoScroll && (
-        <button
-          onClick={() => {
-            setAutoScroll(true)
-            if (logContainerRef.current) {
-              logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
-            }
-          }}
-          className="absolute bottom-4 right-4 px-3 py-1.5 bg-blue-600 text-theme-text-primary text-xs rounded-full shadow-lg hover:bg-blue-700"
-        >
-          Scroll to bottom
-        </button>
-      )}
+      {/* Floating buttons */}
+      <div className="absolute bottom-4 right-4 flex items-center gap-2">
+        {filteredLines.length > 0 && (
+          <AskAIButton
+            resourceContext={{ kind: kind || 'Workload', namespace, name }}
+            getLogContent={getLogContent}
+          />
+        )}
+        {!autoScroll && (
+          <button
+            onClick={() => {
+              setAutoScroll(true)
+              if (logContainerRef.current) {
+                logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
+              }
+            }}
+            className="px-3 py-1.5 bg-blue-600 text-theme-text-primary text-xs rounded-full shadow-lg hover:bg-blue-700"
+          >
+            Scroll to bottom
+          </button>
+        )}
+      </div>
     </div>
   )
 }

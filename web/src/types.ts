@@ -721,8 +721,8 @@ export interface TrafficFilters {
   timeRange: string
 }
 
-// Main view type now includes 'traffic'
-export type ExtendedMainView = MainView | 'traffic'
+// Main view type includes all navigable views
+export type ExtendedMainView = MainView | 'traffic' | 'scanner' | 'deprecated-apis' | 'argo'
 
 // ============================================================================
 // Image Filesystem Types

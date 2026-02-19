@@ -68,6 +68,14 @@ export function DockProvider({ children }: { children: ReactNode }) {
     })
 
     if (existingTab) {
+      // For AI chat tabs, update initialMessage so new log context is sent
+      if (existingTab.type === 'ai-chat' && tabData.initialMessage) {
+        setTabs(prev => prev.map(t =>
+          t.id === existingTab.id
+            ? { ...t, initialMessage: tabData.initialMessage, resourceContext: tabData.resourceContext }
+            : t
+        ))
+      }
       setActiveTabId(existingTab.id)
       setIsExpanded(true)
       return existingTab.id

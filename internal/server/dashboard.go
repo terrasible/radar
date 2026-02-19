@@ -34,6 +34,7 @@ type DashboardResponse struct {
 	HelmReleases      DashboardHelmSummary        `json:"helmReleases"`
 	Metrics           *DashboardMetrics           `json:"metrics"`
 	CertificateHealth *DashboardCertificateHealth `json:"certificateHealth,omitempty"`
+	ArgoSummary       *DashboardArgoSummary       `json:"argoSummary,omitempty"`
 	Degraded          bool                        `json:"degraded,omitempty"`
 }
 
@@ -283,10 +284,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	type metricsResult struct {
 		metrics *DashboardMetrics
 	}
+	type argoResult struct {
+		summary *DashboardArgoSummary
+	}
 
 	helmDone := make(chan helmResult, 1)
 	trafficDone := make(chan trafficResult, 1)
 	metricsDone := make(chan metricsResult, 1)
+	argoDone := make(chan argoResult, 1)
 
 	go func() {
 		helmDone <- helmResult{summary: s.getDashboardHelmSummary(namespace)}
@@ -296,6 +301,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		metricsDone <- metricsResult{metrics: s.getDashboardMetrics(ctx)}
+	}()
+	go func() {
+		argoDone <- argoResult{summary: s.getDashboardArgoSummary(namespace)}
 	}()
 
 	// Collect cluster info
@@ -328,6 +336,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	select {
 	case mr := <-metricsDone:
 		resp.Metrics = mr.metrics
+	case <-ctx.Done():
+		degraded = true
+	}
+
+	// Collect ArgoCD summary
+	select {
+	case ar := <-argoDone:
+		resp.ArgoSummary = ar.summary
 	case <-ctx.Done():
 		degraded = true
 	}

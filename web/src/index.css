@@ -165,6 +165,261 @@
 }
 
 /* ============================================
+   ADDITIONAL THEMES (override CSS variables)
+   Each block overrides the dark base theme.
+   ============================================ */
+
+/* Nord — cool blue-gray palette */
+[data-color-theme="nord"] {
+  --bg-base: #2E3440;
+  --bg-surface: #3B4252;
+  --bg-elevated: #434C5E;
+  --bg-hover: #4C566A;
+  --bg-active: #384756;
+
+  --text-primary: #ECEFF4;
+  --text-secondary: #D8DEE9;
+  --text-tertiary: #81A1C1;
+  --text-disabled: #4C566A;
+
+  --border-default: #434C5E;
+  --border-light: #4C566A;
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border-focus: #88C0D0;
+
+  --accent: #88C0D0;
+  --accent-light: #8FBCBB;
+  --accent-muted: rgba(136, 192, 208, 0.2);
+  --accent-text: #88C0D0;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.35);
+
+  --topology-node-border: rgba(255, 255, 255, 0.06);
+  --topology-node-shadow: 0 1px 3px rgba(0,0,0,0.25), 0 4px 12px rgba(0,0,0,0.15);
+
+  --scrollbar-track: #3B4252;
+  --scrollbar-thumb: #4C566A;
+  --scrollbar-thumb-hover: #5E6779;
+
+  --group-border-namespace: rgba(136, 192, 208, 0.4);
+  --group-border-app: rgba(163, 190, 140, 0.4);
+  --group-border-label: rgba(235, 203, 139, 0.4);
+  --group-header-namespace: rgba(136, 192, 208, 0.15);
+  --group-header-app: rgba(163, 190, 140, 0.15);
+  --group-header-label: rgba(235, 203, 139, 0.15);
+  --group-label-namespace: #88C0D0;
+  --group-label-app: #A3BE8C;
+  --group-label-label: #EBCB8B;
+  --group-icon-namespace: #81A1C1;
+  --group-icon-app: #A3BE8C;
+  --group-icon-label: #EBCB8B;
+
+  --topology-bg-dots: #434C5E;
+}
+
+/* Dracula — purple-tinted dark */
+[data-color-theme="dracula"] {
+  --bg-base: #282A36;
+  --bg-surface: #343746;
+  --bg-elevated: #44475A;
+  --bg-hover: #50566A;
+  --bg-active: #3A3D52;
+
+  --text-primary: #F8F8F2;
+  --text-secondary: #C5C8D4;
+  --text-tertiary: #6272A4;
+  --text-disabled: #44475A;
+
+  --border-default: #44475A;
+  --border-light: #50566A;
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border-focus: #BD93F9;
+
+  --accent: #BD93F9;
+  --accent-light: #FF79C6;
+  --accent-muted: rgba(189, 147, 249, 0.2);
+  --accent-text: #BD93F9;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+
+  --topology-node-border: rgba(255, 255, 255, 0.06);
+  --topology-node-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.2);
+
+  --scrollbar-track: #343746;
+  --scrollbar-thumb: #44475A;
+  --scrollbar-thumb-hover: #6272A4;
+
+  --group-border-namespace: rgba(139, 233, 253, 0.4);
+  --group-border-app: rgba(80, 250, 123, 0.4);
+  --group-border-label: rgba(241, 250, 140, 0.4);
+  --group-header-namespace: rgba(139, 233, 253, 0.12);
+  --group-header-app: rgba(80, 250, 123, 0.12);
+  --group-header-label: rgba(241, 250, 140, 0.12);
+  --group-label-namespace: #8BE9FD;
+  --group-label-app: #50FA7B;
+  --group-label-label: #F1FA8C;
+  --group-icon-namespace: #8BE9FD;
+  --group-icon-app: #50FA7B;
+  --group-icon-label: #F1FA8C;
+
+  --topology-bg-dots: #44475A;
+}
+
+/* Catppuccin Mocha — warm pastel dark */
+[data-color-theme="catppuccin"] {
+  --bg-base: #1E1E2E;
+  --bg-surface: #313244;
+  --bg-elevated: #45475A;
+  --bg-hover: #585B70;
+  --bg-active: #2A2B3D;
+
+  --text-primary: #CDD6F4;
+  --text-secondary: #BAC2DE;
+  --text-tertiary: #A6ADC8;
+  --text-disabled: #585B70;
+
+  --border-default: #45475A;
+  --border-light: #585B70;
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border-focus: #CBA6F7;
+
+  --accent: #CBA6F7;
+  --accent-light: #F5C2E7;
+  --accent-muted: rgba(203, 166, 247, 0.2);
+  --accent-text: #CBA6F7;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+
+  --topology-node-border: rgba(255, 255, 255, 0.06);
+  --topology-node-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.2);
+
+  --scrollbar-track: #313244;
+  --scrollbar-thumb: #45475A;
+  --scrollbar-thumb-hover: #585B70;
+
+  --group-border-namespace: rgba(137, 180, 250, 0.4);
+  --group-border-app: rgba(166, 227, 161, 0.4);
+  --group-border-label: rgba(249, 226, 175, 0.4);
+  --group-header-namespace: rgba(137, 180, 250, 0.15);
+  --group-header-app: rgba(166, 227, 161, 0.15);
+  --group-header-label: rgba(249, 226, 175, 0.15);
+  --group-label-namespace: #89B4FA;
+  --group-label-app: #A6E3A1;
+  --group-label-label: #F9E2AF;
+  --group-icon-namespace: #89B4FA;
+  --group-icon-app: #A6E3A1;
+  --group-icon-label: #F9E2AF;
+
+  --topology-bg-dots: #45475A;
+}
+
+/* Rose Pine — muted, elegant dark */
+[data-color-theme="rose-pine"] {
+  --bg-base: #191724;
+  --bg-surface: #1F1D2E;
+  --bg-elevated: #26233A;
+  --bg-hover: #403D52;
+  --bg-active: #21202E;
+
+  --text-primary: #E0DEF4;
+  --text-secondary: #908CAA;
+  --text-tertiary: #6E6A86;
+  --text-disabled: #524F67;
+
+  --border-default: #26233A;
+  --border-light: #403D52;
+  --border-subtle: rgba(255, 255, 255, 0.03);
+  --border-focus: #C4A7E7;
+
+  --accent: #C4A7E7;
+  --accent-light: #EA9A97;
+  --accent-muted: rgba(196, 167, 231, 0.2);
+  --accent-text: #C4A7E7;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.45);
+
+  --topology-node-border: rgba(255, 255, 255, 0.05);
+  --topology-node-shadow: 0 1px 3px rgba(0,0,0,0.35), 0 4px 12px rgba(0,0,0,0.25);
+
+  --scrollbar-track: #1F1D2E;
+  --scrollbar-thumb: #403D52;
+  --scrollbar-thumb-hover: #524F67;
+
+  --group-border-namespace: rgba(156, 207, 216, 0.4);
+  --group-border-app: rgba(62, 143, 176, 0.4);
+  --group-border-label: rgba(246, 193, 119, 0.4);
+  --group-header-namespace: rgba(156, 207, 216, 0.12);
+  --group-header-app: rgba(62, 143, 176, 0.12);
+  --group-header-label: rgba(246, 193, 119, 0.12);
+  --group-label-namespace: #9CCFD8;
+  --group-label-app: #3E8FB0;
+  --group-label-label: #F6C177;
+  --group-icon-namespace: #9CCFD8;
+  --group-icon-app: #3E8FB0;
+  --group-icon-label: #F6C177;
+
+  --topology-bg-dots: #26233A;
+}
+
+/* Solarized Dark — warm, low-contrast */
+[data-color-theme="solarized-dark"] {
+  --bg-base: #002B36;
+  --bg-surface: #073642;
+  --bg-elevated: #094959;
+  --bg-hover: #0B5C6F;
+  --bg-active: #0A4A5C;
+
+  --text-primary: #839496;
+  --text-secondary: #93A1A1;
+  --text-tertiary: #657B83;
+  --text-disabled: #586E75;
+
+  --border-default: #094959;
+  --border-light: #0B5C6F;
+  --border-subtle: rgba(255, 255, 255, 0.03);
+  --border-focus: #268BD2;
+
+  --accent: #268BD2;
+  --accent-light: #2AA198;
+  --accent-muted: rgba(38, 139, 210, 0.2);
+  --accent-text: #268BD2;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+
+  --topology-node-border: rgba(255, 255, 255, 0.06);
+  --topology-node-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.2);
+
+  --scrollbar-track: #073642;
+  --scrollbar-thumb: #094959;
+  --scrollbar-thumb-hover: #0B5C6F;
+
+  --group-border-namespace: rgba(38, 139, 210, 0.4);
+  --group-border-app: rgba(133, 153, 0, 0.4);
+  --group-border-label: rgba(181, 137, 0, 0.4);
+  --group-header-namespace: rgba(38, 139, 210, 0.15);
+  --group-header-app: rgba(133, 153, 0, 0.15);
+  --group-header-label: rgba(181, 137, 0, 0.15);
+  --group-label-namespace: #268BD2;
+  --group-label-app: #859900;
+  --group-label-label: #B58900;
+  --group-icon-namespace: #268BD2;
+  --group-icon-app: #859900;
+  --group-icon-label: #B58900;
+
+  --topology-bg-dots: #094959;
+}
+
+/* ============================================
    BASE STYLES
    ============================================ */
 

@@ -185,6 +185,19 @@ export interface DashboardCertificateHealth {
   expired: number
 }
 
+export interface DashboardArgoSummary {
+  total: number
+  healthy: number
+  outOfSync: number
+  degraded: number
+  applications: Array<{
+    name: string
+    namespace: string
+    syncStatus: string
+    healthStatus: string
+  }>
+}
+
 export interface DashboardResponse {
   cluster: DashboardCluster
   health: DashboardHealth
@@ -197,6 +210,7 @@ export interface DashboardResponse {
   helmReleases: DashboardHelmSummary
   metrics: DashboardMetrics | null
   certificateHealth: DashboardCertificateHealth | null
+  argoSummary?: DashboardArgoSummary
 }
 
 export interface DashboardCRDsResponse {
@@ -1457,6 +1471,7 @@ const fluxInvalidateKeys = (v: FluxResourceVars) => [
 const argoInvalidateKeys = (v: ArgoAppVars) => [
   ['resources', 'applications'],
   ['resource', 'applications', v.namespace, v.name],
+  ['argo-dashboard'],
 ]
 
 // ============================================================================
@@ -1747,4 +1762,196 @@ export function createWorkloadLogStream(
   const queryString = params.toString()
 
   return new EventSource(`${API_BASE}/workloads/${kind}/${namespace}/${name}/logs/stream${queryString ? `?${queryString}` : ''}`)
+}
+
+// ============================================================================
+// Scanner / Linting
+// ============================================================================
+
+export interface ScanFinding {
+  ruleId: string
+  ruleName: string
+  category: string
+  severity: string
+  kind: string
+  namespace: string
+  name: string
+  message: string
+  remediation: string
+  container?: string
+  source?: string
+}
+
+export interface ScanSummary {
+  totalFindings: number
+  bySeverity: Record<string, number>
+  byCategory: Record<string, number>
+  resourcesScanned: number
+  duration: string
+}
+
+export interface ScanResult {
+  findings: ScanFinding[]
+  summary: ScanSummary
+  scannedAt: string
+}
+
+export function useScanResults(options?: {
+  category?: string
+  severity?: string
+  namespaces?: string[]
+  kind?: string
+  external?: boolean
+}) {
+  const params = new URLSearchParams()
+  if (options?.category) params.set('category', options.category)
+  if (options?.severity) params.set('severity', options.severity)
+  if (options?.namespaces?.length) params.set('namespaces', options.namespaces.join(','))
+  if (options?.kind) params.set('kind', options.kind)
+  if (options?.external) params.set('external', 'true')
+  const qs = params.toString()
+
+  return useQuery<ScanResult>({
+    queryKey: ['scanner-results', options?.category, options?.severity, options?.namespaces, options?.kind, options?.external],
+    queryFn: () => fetchJSON(`/scanner/results${qs ? `?${qs}` : ''}`),
+    staleTime: 30000,
+    refetchInterval: 60000,
+  })
+}
+
+export function useScanSummary() {
+  return useQuery<ScanSummary>({
+    queryKey: ['scanner-summary'],
+    queryFn: () => fetchJSON('/scanner/summary'),
+    staleTime: 30000,
+    refetchInterval: 60000,
+  })
+}
+
+export function useTriggerScan() {
+  const queryClient = useQueryClient()
+
+  return useMutation<ScanResult, Error, { external?: boolean }>({
+    mutationFn: async (opts) => {
+      const params = new URLSearchParams()
+      if (opts?.external) params.set('external', 'true')
+      const qs = params.toString()
+      const response = await fetch(`${API_BASE}/scanner/run${qs ? `?${qs}` : ''}`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    meta: {
+      errorMessage: 'Scan failed',
+      successMessage: 'Scan completed',
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['scanner-results'] })
+      queryClient.invalidateQueries({ queryKey: ['scanner-summary'] })
+    },
+  })
+}
+
+// ============================================================================
+// Deprecated API Detection
+// ============================================================================
+
+export interface DeprecationRule {
+  group: string
+  version: string
+  kind: string
+  replacementGroup: string
+  replacementVersion: string
+  removedInVersion: string
+  deprecatedInVersion: string
+  migrationGuide: string
+}
+
+export interface DeprecationFinding {
+  rule: DeprecationRule
+  severity: string
+}
+
+export interface DeprecationScanResult {
+  clusterVersion: string
+  findings: DeprecationFinding[]
+  totalDeprecated: number
+  totalRemoved: number
+  scanTimestamp: string
+}
+
+export function useDeprecatedAPIs() {
+  return useQuery<DeprecationScanResult>({
+    queryKey: ['deprecated-apis'],
+    queryFn: () => fetchJSON('/scanner/deprecated'),
+    staleTime: 60000,
+    refetchInterval: 120000,
+  })
+}
+
+// ============================================================================
+// ArgoCD Dashboard
+// ============================================================================
+
+export interface ArgoDashboardResource {
+  group?: string
+  kind: string
+  namespace?: string
+  name: string
+  health?: string
+  sync?: string
+}
+
+export interface ArgoDashboardCondition {
+  type: string
+  message?: string
+}
+
+export interface ArgoDashboardApp {
+  name: string
+  namespace: string
+  syncStatus: string
+  healthStatus: string
+  repoURL?: string
+  path?: string
+  targetRevision?: string
+  chart?: string
+  destServer?: string
+  destNamespace?: string
+  autoSync: boolean
+  prune?: boolean
+  selfHeal?: boolean
+  operationPhase?: string
+  operationMessage?: string
+  lastSyncTime?: string
+  resourceCount: number
+  resources?: ArgoDashboardResource[]
+  conditions?: ArgoDashboardCondition[]
+  age: string
+  createdAt: string
+}
+
+export interface ArgoDashboardSummary {
+  total: number
+  healthCounts: Record<string, number>
+  syncCounts: Record<string, number>
+  suspended: number
+}
+
+export interface ArgoDashboardResponse {
+  summary: ArgoDashboardSummary
+  applications: ArgoDashboardApp[]
+}
+
+export function useArgoDashboard() {
+  return useQuery<ArgoDashboardResponse>({
+    queryKey: ['argo-dashboard'],
+    queryFn: () => fetchJSON('/argo/dashboard'),
+    staleTime: 15000,
+    refetchInterval: 30000,
+  })
 }

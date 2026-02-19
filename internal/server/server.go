@@ -212,6 +212,13 @@ func (s *Server) setupRoutes() {
 			r.Post("/argo/applications/{namespace}/{name}/terminate", s.handleArgoTerminate)
 			r.Post("/argo/applications/{namespace}/{name}/suspend", s.handleArgoSuspend)
 			r.Post("/argo/applications/{namespace}/{name}/resume", s.handleArgoResume)
+			r.Get("/argo/dashboard", s.handleArgoDashboard)
+
+			// Scanner routes (deprecated APIs, security, best practices, reliability, cost)
+			r.Get("/scanner/deprecated", s.handleDeprecatedAPIs)
+			r.Get("/scanner/results", s.handleScannerResults)
+			r.Get("/scanner/summary", s.handleScannerSummary)
+			r.Post("/scanner/run", s.handleScannerRun)
 
 			// AI resource preview (minified output for MCP/debugging)
 			r.Get("/ai/resources/{kind}", s.handleAIListResources)
