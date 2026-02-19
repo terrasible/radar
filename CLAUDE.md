@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-Terrasible (formerly Radar) is an AI-powered Kubernetes visibility platform — local-first, no account required, no cloud dependency, fast. It provides topology visualization, event timeline, service traffic maps, resource browsing, Helm management, AI-assisted troubleshooting, and MCP integration for AI tools. Runs as a kubectl plugin (`kubectl-radar`) or standalone binary and opens a web UI in the browser. Open source, free forever. Originally built by Skyhook, extended by Terrasible.
+Terrasible (formerly Radar) is an AI-powered Kubernetes visibility platform — local-first, no account required, no cloud dependency, fast. It provides topology visualization, event timeline, service traffic maps, resource browsing, Helm management, AI-assisted troubleshooting, MCP integration for AI tools, resource scanning/linting, deprecated API detection, ArgoCD dashboard, and a multi-theme UI. Runs as a kubectl plugin (`kubectl-radar`) or standalone binary and opens a web UI in the browser. Open source, free forever. Originally built by Skyhook, extended by Terrasible.
 
 The frontend is branded as **"Terrasible — AI-Powered Kubernetes Visibility Platform"**.
 
@@ -109,6 +109,18 @@ radar/
 │   │   ├── server.go          # MCP HTTP handler setup
 │   │   ├── tools.go           # MCP tool definitions (7 tools)
 │   │   └── resources.go       # MCP resource definitions (3 resources)
+│   ├── scanner/               # Resource scanning/linting engine
+│   │   ├── types.go           # Core types (Finding, Rule, ScanResult, ScanContext)
+│   │   ├── registry.go        # Global rule registry with init()-based registration
+│   │   ├── scanner.go         # Scan orchestrator (reads from informer cache)
+│   │   ├── rules_security.go  # 9 security rules (SEC-001 to SEC-009)
+│   │   ├── rules_bestpractice.go # 5 best practice rules (BP-001 to BP-005)
+│   │   ├── rules_reliability.go  # 5 reliability rules (REL-001 to REL-005)
+│   │   ├── rules_cost.go      # 3 cost rules (COST-001 to COST-003)
+│   │   ├── external.go        # External tool integration (trivy, polaris, kube-score)
+│   │   ├── deprecated.go      # Deprecated K8s API detection with static rules
+│   │   ├── deprecated_test.go # Tests for version parsing and deprecation rules
+│   │   └── scanner_test.go    # Scanner unit tests
 │   ├── server/
 │   │   ├── server.go          # chi router, main REST endpoints
 │   │   ├── sse.go             # Server-Sent Events broadcaster
@@ -117,10 +129,12 @@ radar/
 │   │   ├── logs.go            # Pod logs streaming
 │   │   ├── workload_logs.go   # Workload-level log aggregation
 │   │   ├── portforward.go     # Port forwarding sessions
-│   │   ├── dashboard.go       # Dashboard summary endpoint
+│   │   ├── dashboard.go       # Dashboard summary endpoint (includes ArgoCD summary)
+│   │   ├── argo_dashboard.go  # ArgoCD dashboard types + handler
 │   │   ├── argo_handlers.go   # ArgoCD sync/refresh/suspend handlers
 │   │   ├── flux_handlers.go   # FluxCD reconcile/suspend handlers
 │   │   ├── gitops_types.go    # Shared GitOps request/response types
+│   │   ├── scanner_handlers.go # Scanner + deprecated API HTTP handlers
 │   │   ├── ai_handlers.go     # AI resource preview endpoints
 │   │   ├── traffic_handlers.go # Service mesh traffic flow handlers
 │   │   └── desktop_update.go  # Desktop app auto-update handlers
@@ -148,14 +162,26 @@ radar/
 │   │   │   │   ├── ChatMessage.tsx  # Single chat message (markdown rendering)
 │   │   │   │   ├── ChatInput.tsx    # Chat input box with send/stop
 │   │   │   │   └── index.ts        # Re-exports (DockProvider, useOpenChat, etc.)
+│   │   │   ├── argo/          # ArgoCD dashboard view
+│   │   │   │   ├── ArgoDashboardView.tsx # Full ArgoCD dashboard (summary + app table)
+│   │   │   │   └── index.ts             # Re-exports
 │   │   │   ├── gitops/        # ArgoCD/FluxCD management panels
 │   │   │   ├── helm/          # Helm release management UI
-│   │   │   ├── home/          # Home/dashboard view
-│   │   │   ├── logs/          # Logs viewer component
+│   │   │   ├── home/          # Home/dashboard view + feature cards
+│   │   │   │   ├── HomeView.tsx          # Main dashboard with teaser cards grid
+│   │   │   │   ├── ArgoSummary.tsx       # ArgoCD dashboard card (top 6 apps)
+│   │   │   │   ├── DeprecatedAPIBanner.tsx # Amber warning banner for deprecated APIs
+│   │   │   │   ├── DeprecatedAPIsView.tsx  # Full deprecated APIs detail page
+│   │   │   │   └── ...                   # Other dashboard cards
+│   │   │   ├── logs/          # Logs viewer component + AI integration
+│   │   │   │   ├── AskAIButton.tsx       # Floating "Ask AI" button for log analysis
 │   │   │   ├── portforward/   # Port forward manager
 │   │   │   ├── resource/      # Single resource detail page
 │   │   │   ├── resource-drawer/ # Resource drawer overlay
 │   │   │   ├── resources/     # Resource list panels
+│   │   │   ├── scanner/       # Resource scanner/linting UI
+│   │   │   │   ├── ScannerView.tsx          # Main scanner page (summary + findings table)
+│   │   │   │   └── ScannerDashboardCard.tsx # Dashboard card for scanner summary
 │   │   │   ├── timeline/      # Timeline view (activity & changes)
 │   │   │   ├── topology/      # Graph visualization
 │   │   │   ├── traffic/       # Traffic flow visualization
@@ -453,6 +479,11 @@ GET  /api/helm/artifacthub/charts/{repo}/{chart}   # Get ArtifactHub chart detai
 GET  /api/helm/artifacthub/charts/{repo}/{chart}/{version} # Get ArtifactHub chart version
 ```
 
+### ArgoCD Dashboard
+```
+GET  /api/argo/dashboard                          # Full ArgoCD dashboard (summary + applications)
+```
+
 ### GitOps — ArgoCD
 ```
 POST /api/argo/applications/{ns}/{name}/sync      # Trigger ArgoCD sync
@@ -482,6 +513,18 @@ GET  /api/ai/models                           # List models for active provider
 ```
 GET  /api/ai/resources/{kind}                 # Minified resource list (verbosity: summary|detail|compact)
 GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbosity: summary|detail|compact)
+```
+
+### Resource Scanner
+```
+GET  /api/scanner/results                         # All scan findings (?category, ?severity, ?namespaces, ?kind, ?external)
+GET  /api/scanner/summary                         # Finding counts only (for dashboard card)
+POST /api/scanner/run                             # Trigger fresh scan (optional external tools)
+```
+
+### Deprecated API Detection
+```
+GET  /api/scanner/deprecated                      # Deprecated K8s API scan results
 ```
 
 ### Traffic (Service Mesh)
@@ -608,6 +651,53 @@ GET  /api/debug/informers                     # List active typed and dynamic in
 - Secret safety: never exposes `.data`/`.stringData`, redacts env values with known secret patterns (API keys, tokens, passwords, base64 blocks)
 - Event deduplication: groups by (reason, normalized message), replaces pod hashes/UUIDs/IPs with placeholders
 - Log filtering: prioritizes error/warning patterns, falls back to last 20 lines, redacts secrets
+
+### Resource Scanner/Linting Engine
+- Built-in scanning engine with 22 rules across 4 categories
+- Rule interface: `ID()`, `Name()`, `Category()`, `Severity()`, `Check(*ScanContext) []Finding`
+- Global rule registry with `init()`-based registration
+- Reads from informer cache (no direct API calls during scan)
+- **Security rules** (SEC-001 to SEC-009): root containers, privileged, hostNetwork, capabilities, seccomp, secrets as env vars, default service account, missing NetworkPolicies
+- **Best practice rules** (BP-001 to BP-005): missing health probes, `:latest` tag, single-replica, missing labels, missing anti-affinity
+- **Reliability rules** (REL-001 to REL-005): CrashLoopBackOff, pending pods, evicted pods, job failures, HPA at max
+- **Cost rules** (COST-001 to COST-003): no resource requests/limits, over-provisioned, under-provisioned
+- External tool integration: optional trivy/polaris/kube-score via `exec.LookPath()`, subprocess execution, JSON parsing
+- Findings tagged with `Source` field ("built-in" or tool name)
+- Package: `internal/scanner/`
+
+### Deprecated K8s API Detection
+- Static rules database (~22 rules) mapping old API group/version/kind to replacements
+- Covers: extensions/v1beta1, apps/v1beta1, batch/v1beta1, policy/v1beta1, autoscaling/v2beta1, flowcontrol v1beta1-v1beta3, etc.
+- Compares cluster version against rule removal/deprecation versions
+- Classifies each finding as "removed" (already past removal version) or "deprecated" (still available but deprecated)
+- Dashboard shows amber warning banner with count; detail view shows each finding with migration guide
+- Package: `internal/scanner/deprecated.go`
+
+### ArgoCD Dashboard
+- Aggregated ArgoCD Application health/sync dashboard
+- Lists Applications via dynamic cache (CRD-based, no ArgoCD API dependency)
+- Extracts fields from unstructured objects: spec (source, destination, syncPolicy), status (health, sync, operationState, resources, conditions)
+- Summary: total, health counts, sync counts, suspended count
+- Sort: degraded/missing first, then by name
+- Compact summary for main dashboard card (top 6 apps, concurrent goroutine in `handleDashboard`)
+- Returns empty response gracefully when ArgoCD CRD not installed
+- Types + handler in `internal/server/argo_dashboard.go`
+
+### Logs AI Integration
+- Floating "Ask AI" button on pod log and workload log viewers
+- Sends last 100 log lines as context to AI chat via `useOpenChat()` singleton
+- Formats log content with timestamps (and pod names for workload logs)
+- DockContext supports re-sending initial message when AI chat reopened with new context
+- Component: `web/src/components/logs/AskAIButton.tsx`
+
+### Multi-Theme System
+- 7 themes: Dark (default), Light, Nord, Dracula, Catppuccin Mocha, Rose Pine, Solarized Dark
+- Two-attribute approach: `data-theme` ("dark"/"light") for Tailwind `dark:` variant compatibility + `data-color-theme` for specific palette
+- All dark-based themes keep `data-theme="dark"` so 69 `dark:` classes in `badge-colors.ts` work unchanged
+- CSS custom properties override per theme in `index.css` (~30 variables each: backgrounds, text, borders, accents, shadows, scrollbar, topology, groups)
+- Theme picker dropdown in header (Palette icon) with color swatch previews
+- Persisted to localStorage (`radar-theme`), respects OS system preference on first visit
+- Theme metadata exported from `ThemeContext.tsx`: `THEMES`, `THEME_META` (label, baseScheme, preview colors)
 
 ### MCP Server
 - Stateless HTTP handler mounted at `/mcp` (JSON-RPC over HTTP)
